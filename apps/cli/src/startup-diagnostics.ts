@@ -13,6 +13,28 @@ interface StartupDiagnosticContext {
   profile: string
 }
 
+/**
+ * Node's `listen` failure text, whose capture group names the address that could not be bound.
+ * The desktop host matches only the shorter `listen EADDRINUSE` prefix for its dialog, so the address
+ * clause required here is what lets the terminal name the address; a reworded failure drops the advice.
+ */
+const ADDRESS_ALREADY_IN_USE = /\blisten EADDRINUSE: address already in use (\S+)/u
+
+/**
+ * Terminal advice for an occupied listen address, or an empty string for every other startup failure.
+ * The saved report keeps the raw plugin failure; this only names the address and the operator's options,
+ * and `dsh web` is the shipped listener whose `--port` flag moves the bind.
+ * @param error - startup audit failure whose message renders the failed plugins.
+ * @returns the blank line and the advice lines that follow the summary, each line ending in a newline,
+ * or an empty string when the failure is not an occupied listen address.
+ */
+function bindAdvice(error: StartupError): string {
+  const address = ADDRESS_ALREADY_IN_USE.exec(error.message)?.[1]
+  if (address === undefined) return ''
+  return `\ndsh: ${address} is already in use: something is listening there, often another DSH instance (such as dsh web or the desktop app).\n`
+    + 'dsh: Use that instance, quit it and retry, or serve this one on another port (dsh web --port <port>).\n'
+}
+
 /** Wait for stderr to finish the write before the failed process exits. */
 function writeStderr(text: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -24,7 +46,8 @@ function writeStderr(text: string): Promise<void> {
 }
 
 /**
- * Print the startup summary and save a private, uniquely named report under DSH_HOME/logs.
+ * Print the startup summary, name the ways out of an occupied listen address, and save a private,
+ * uniquely named report under DSH_HOME/logs.
  * Failed writes print the complete report to stderr instead of claiming a saved path.
  * @param error - startup audit failure retaining plugin metadata and original errors.
  * @param context - resolved Harness home, application version, and selected profile.
@@ -54,7 +77,8 @@ export async function reportStartupFailure(
     getters: false,
     colors: false,
   }) + '\n'
-  await write(`${error.message}\n`)
+  // The trailing newline ends the summary line; bindAdvice owns the blank line and the advice when it applies.
+  await write(`${error.message}\n${bindAdvice(error)}`)
   const logDir = join(context.home, 'logs')
   const logPath = join(logDir, `startup-${now.replaceAll(':', '-')}-${randomUUID()}.log`)
   try {

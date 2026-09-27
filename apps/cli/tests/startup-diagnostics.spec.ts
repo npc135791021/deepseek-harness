@@ -37,6 +37,41 @@ describe('startup diagnostic files', () => {
     expect(write).toHaveBeenCalledWith(expect.stringContaining(`Full diagnostics: ${join(dir, 'logs')}`), expect.any(Function))
   })
 
+  it('names the occupied address and the ways out when a plugin cannot bind', async () => {
+    const dir = await home()
+    const address = '127.0.0.1:3080'
+    const error = startupError(new Error(`listen EADDRINUSE: address already in use ${address}`))
+    error.message = 'dsh: startup failed: 2 required plugins did not activate'
+      + '\n\nFailed plugins (1):\n  webserver (required)'
+      + `\n    Package: @deepseek-ai/dsh-host-webserver\n    Error: listen EADDRINUSE: address already in use ${address}`
+    const chunks: string[] = []
+
+    await reportStartupFailure(error, { home: dir, version: '1.2.3', profile: 'web' }, (text) => { chunks.push(text) })
+
+    const output = chunks.join('')
+    // The real message carries no trailing newline; this pins the single blank line before the advice.
+    expect(output).toContain(`${error.message}\n\ndsh: ${address} is already in use:`)
+    expect(output).toContain('dsh web --port <port>')
+    // The advice is terminal-only; the saved report keeps the raw failure.
+    const files = await readdir(join(dir, 'logs'))
+    expect(await readFile(join(dir, 'logs', files[0]!), 'utf8')).not.toContain('is already in use')
+  })
+
+  it('adds no bind advice when the bind failed for another reason', async () => {
+    const dir = await home()
+    const error = startupError(new Error('listen EACCES: permission denied 127.0.0.1:80'))
+    error.message = 'dsh: startup failed: 1 required plugin did not activate'
+      + '\n\nFailed plugins (1):\n  webserver (required)'
+      + '\n    Error: listen EACCES: permission denied 127.0.0.1:80'
+    const chunks: string[] = []
+
+    await reportStartupFailure(error, { home: dir, version: '1.2.3', profile: 'web' }, (text) => { chunks.push(text) })
+
+    // An unmatched failure keeps exactly the summary-to-report separator.
+    expect(chunks.join('')).toContain(`${error.message}\n\nFull diagnostics: `)
+    expect(chunks.join('')).not.toContain('is already in use')
+  })
+
   it('waits for stderr completion before resolving', async () => {
     const dir = await home()
     const pending: Array<() => void> = []
